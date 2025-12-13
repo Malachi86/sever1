@@ -75,9 +75,38 @@ def login():
         print(f"!!! Error in /api/login: {e} !!!")
         return jsonify({"error": f"An error occurred: {e}"}), 500
 
+# API to create a new user
+@app.route("/api/register", methods=["POST"])
+def register():
+    if not db:
+        return jsonify({"error": "Database not initialized"}), 500
+    try:
+        data = request.get_json()
+        usn_emp = data.get("usn_emp")
+        
+        # Check if user already exists
+        users_ref = db.collection('users')
+        query = users_ref.where('usn_emp', '==', usn_emp).limit(1)
+        existing_users = list(query.stream())
+        if existing_users:
+            return jsonify({"error": "User with this USN/EMP already exists"}), 409
+
+        # Create new user
+        new_user = {
+            "fullName": data.get("fullName"),
+            "usn_emp": usn_emp,
+            "password": data.get("password"),
+            "role": data.get("role")
+        }
+        users_ref.add(new_user)
+        return jsonify({"message": "User created successfully"}), 201
+
+    except Exception as e:
+        print(f"!!! Error in /api/register: {e} !!!")
+        return jsonify({"error": f"An error occurred: {e}"}), 500
+
 if __name__ == '__main__':
     # Use Gunicorn for production, but app.run is fine for Render's environment
     # Render will use the start command `gunicorn server:app`
     # The host and port here are for local testing if you run `python server.py`
     app.run(host='0.0.0.0', port=10000, debug=False)
-
