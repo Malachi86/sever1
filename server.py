@@ -29,19 +29,36 @@ def health_check():
     else:
         return "Server is up, but Firebase connection failed."
 
-# API to get all users (Simplified)
+# API to get all users (Highly Robust)
 @app.route("/api/users", methods=["GET"])
 def get_users():
     if not db:
         return jsonify({"error": "Database not initialized"}), 500
-    try:
-        users_ref = db.collection('users')
-        docs = users_ref.stream()
-        users = [doc.to_dict() for doc in docs]
-        return jsonify(users)
-    except Exception as e:
-        print(f"!!! Error in /api/users: {e} !!!")
-        return jsonify({"error": f"Failed to fetch users: {e}"}), 500
+    
+    users_ref = db.collection('users')
+    docs = users_ref.stream()
+    users = []
+    
+    for doc in docs:
+        try:
+            user_data = doc.to_dict()
+            
+            # Skip any malformed or empty documents
+            if not user_data:
+                print(f"Skipping empty document: {doc.id}")
+                continue
+
+            # Ensure every teacher has a subjects list for data consistency
+            if user_data.get('role') == 'teacher' and 'subjects' not in user_data:
+                user_data['subjects'] = []
+            
+            users.append(user_data)
+        except Exception as e:
+            # If one document fails, log it and continue with the others
+            print(f"!!! Failed to process document {doc.id}: {e} !!!")
+            continue
+
+    return jsonify(users)
 
 # API to check login credentials
 @app.route("/api/login", methods=["POST"])
