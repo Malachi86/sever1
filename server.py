@@ -93,7 +93,7 @@ def register():
 
         # Create new user
         new_user = {
-            "fullName": data.get("fullName"),
+            "name": data.get("name"),
             "usn_emp": usn_emp,
             "password": data.get("password"),
             "role": data.get("role")
