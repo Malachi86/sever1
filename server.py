@@ -93,12 +93,12 @@ def register():
 
         # Create new user
         new_user = {
-            "name": data.get("name"),
+            "name": data.get("name") or data.get("fullName"),
             "usn_emp": usn_emp,
             "password": data.get("password"),
             "role": data.get("role")
         }
-        users_ref.add(new_user)
+        users_ref.document(usn_emp).set(new_user)
         return jsonify({"message": "User created successfully"}), 201
 
     except Exception as e:
