@@ -30,7 +30,6 @@ def health_check():
 @app.route("/api/users", methods=['GET'])
 def get_users():
     users = read_data(USERS_FILE)
-    # Ensure teachers have a subjects field for consistency
     for user in users:
         if user.get('role') == 'teacher' and 'subjects' not in user:
             user['subjects'] = []
@@ -48,14 +47,13 @@ def login():
     users = read_data(USERS_FILE)
     user = next((u for u in users if u.get('usn_emp') == usn_emp), None)
 
-    if user and user.get("password") == password:
-        # Don't send password back to client
-        user_info = user.copy()
-        user_info.pop("password", None)
-        return jsonify({"message": "Login successful", "user": user_info})
-    
     if not user:
         return jsonify({"error": "User not found"}), 404
+
+    if user.get("password") == password:
+        user_info = user.copy()
+        user_info.pop("password", None)
+        return jsonify(user_info)
     else:
         return jsonify({"error": "Invalid credentials"}), 401
 
@@ -94,7 +92,6 @@ def create_enrollment():
 
     enrollments = read_data(ENROLLMENTS_FILE)
     
-    # Check for existing pending/approved enrollment
     if any(
         e.get('student_usn') == student_usn and
         e.get('teacher_usn') == teacher_usn and
@@ -127,3 +124,4 @@ def create_enrollment():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=True)
+
