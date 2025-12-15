@@ -11,6 +11,8 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 DB_DIR = os.path.join(os.path.dirname(__file__))
 USERS_FILE = os.path.join(DB_DIR, 'users.json')
 ENROLLMENTS_FILE = os.path.join(DB_DIR, 'enrollments.json')
+REQUESTS_FILE = os.path.join(DB_DIR, 'requests.json') # Added
+ATTENDANCE_FILE = os.path.join(DB_DIR, 'attendance.json') # Added
 
 def read_data(file_path):
     try:
@@ -34,6 +36,24 @@ def get_users():
         if user.get('role') == 'teacher' and 'subjects' not in user:
             user['subjects'] = []
     return jsonify(users)
+
+# Added GET endpoint for enrollments
+@app.route("/api/enrollments", methods=['GET'])
+def get_enrollments():
+    enrollments = read_data(ENROLLMENTS_FILE)
+    return jsonify(enrollments)
+
+# Added GET endpoint for requests
+@app.route("/api/requests", methods=['GET'])
+def get_requests():
+    requests = read_data(REQUESTS_FILE)
+    return jsonify(requests)
+
+# Added GET endpoint for attendance
+@app.route("/api/attendance", methods=['GET'])
+def get_attendance():
+    attendance = read_data(ATTENDANCE_FILE)
+    return jsonify(attendance)
 
 @app.route("/api/login", methods=['POST'])
 def login():
