@@ -4,12 +4,23 @@ import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# --- Firebase Initialization ---
+try:
+    cred = credentials.Certificate("firebase.json")
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+except Exception as e:
+    print(f"Firebase initialization failed: {e}")
+    db = None
+
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 DB_DIR = os.path.dirname(__file__)
-USERS_FILE = os.path.join(DB_DIR, 'users.json')
 ENROLLMENTS_FILE = os.path.join(DB_DIR, 'enrollments.json')
 REQUESTS_FILE = os.path.join(DB_DIR, 'requests.json')
 ATTENDANCE_FILE = os.path.join(DB_DIR, 'attendance.json')
@@ -42,26 +53,45 @@ def log_audit(action, user, details):
 
 @app.route("/")
 def health_check():
-    return "Server is up and running with local JSON database."
+    return "Server is up and running."
 
-# --- User Management ---
+# --- User Management --
 @app.route("/api/users", methods=['GET'])
 def get_users():
-    return jsonify(read_data(USERS_FILE))
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    users_ref = db.collection('users')
+    docs = users_ref.stream()
+    users = [doc.to_dict() for doc in docs]
+    return jsonify(users)
 
 @app.route("/api/login", methods=['POST'])
 def login():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+        
     data = request.get_json()
     usn_emp = data.get("usn_emp")
     password = data.get("password")
+
     if not usn_emp or not password:
         return jsonify({"error": "Missing USN/Employee ID or password"}), 400
-    users = read_data(USERS_FILE)
-    user = next((u for u in users if u.get('usn_emp') == usn_emp), None)
-    if not user:
+
+    users_ref = db.collection('users')
+    query = users_ref.where('usn_emp', '==', usn_emp).limit(1)
+    results = query.stream()
+    
+    user_data = None
+    for doc in results:
+        user_data = doc.to_dict()
+
+    if not user_data:
+        log_audit("Failed Login", usn_emp, f"User {usn_emp} not found.")
         return jsonify({"error": "User not found"}), 404
-    if user.get("password") == password:
-        user_info = user.copy()
+
+    if user_data.get("password") == password:
+        # Remove password before sending user data to client
+        user_info = user_data.copy()
         user_info.pop("password", None)
         log_audit("User Login", usn_emp, f"User {usn_emp} logged in successfully.")
         return jsonify(user_info)
@@ -71,22 +101,30 @@ def login():
 
 @app.route("/api/register", methods=['POST'])
 def register():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
     data = request.get_json()
-    users = read_data(USERS_FILE)
     usn_emp = data.get("usn_emp")
-    if any(u.get('usn_emp') == usn_emp for u in users):
+    
+    users_ref = db.collection('users')
+    query = users_ref.where('usn_emp', '==', usn_emp).limit(1)
+    if any(query.stream()):
         return jsonify({"error": "User with this USN/EMP already exists"}), 409
-    new_user = {
+
+    new_user_data = {
         "name": data.get("name") or data.get("fullName"),
         "usn_emp": usn_emp,
         "password": data.get("password"),
         "role": data.get("role")
     }
-    if new_user['role'] == 'teacher':
-        new_user['subjects'] = []
-    users.append(new_user)
-    write_data(USERS_FILE, users)
-    log_audit("User Registration", usn_emp, f"New user {usn_emp} registered as {new_user['role']}.")
+    if new_user_data['role'] == 'teacher':
+        new_user_data['subjects'] = []
+    
+    # Add a new doc in collection 'users' with a generated id.
+    db.collection('users').add(new_user_data)
+    
+    log_audit("User Registration", usn_emp, f"New user {usn_emp} registered as {new_user_data['role']}.")
     return jsonify({"message": "User created successfully"}), 201
 
 # --- Enrollments ---
@@ -101,9 +139,19 @@ def handle_enrollments():
         if any(e.get('student_usn') == student_usn and e.get('subject_name') == data.get("subject_name") and e.get('status') in ['Pending', 'Approved'] for e in enrollments):
             return jsonify({"error": "You already have a pending or approved enrollment for this subject."}), 409
         
-        users = read_data(USERS_FILE)
-        student = next((u for u in users if u.get('usn_emp') == student_usn), None)
-        teacher = next((u for u in users if u.get('usn_emp') == data.get("teacher_usn")), None)
+        users_ref = db.collection('users')
+        student_query = users_ref.where('usn_emp', '==', student_usn).limit(1)
+        student_results = student_query.stream()
+        student = None
+        for doc in student_results:
+            student = doc.to_dict()
+
+        teacher_query = users_ref.where('usn_emp', '==', data.get("teacher_usn")).limit(1)
+        teacher_results = teacher_query.stream()
+        teacher = None
+        for doc in teacher_results:
+            teacher = doc.to_dict()
+
         if not student or not teacher:
             return jsonify({"error": "Invalid student or teacher ID"}), 404
 
@@ -246,7 +294,7 @@ def update_borrow_request(request_id):
             write_data(LIBRARY_BOOKS_FILE, books)
         
         records = read_data(BORROW_RECORDS_FILE)
-        records.append({
+        records..append({
             "id": f"REC{len(records) + 1}",
             "book_barcode": req['book_barcode'],
             "book_title": req['book_title'],
