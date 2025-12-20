@@ -75,6 +75,17 @@ def get_users():
     users = [doc.to_dict() for doc in docs]
     return jsonify(users)
 
+@app.route("/api/teachers", methods=['GET'])
+def get_teachers():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    users_ref = db.collection('users')
+    # Query for users with the role 'teacher'
+    query = users_ref.where('role', '==', 'teacher')
+    docs = query.stream()
+    teachers = {doc.id: doc.to_dict() for doc in docs}
+    return jsonify(teachers)
+
 @app.route("/api/login", methods=['POST'])
 def login():
     if not db:
