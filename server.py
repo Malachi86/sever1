@@ -9,9 +9,16 @@ from firebase_admin import credentials, firestore
 
 # --- Firebase Initialization ---
 try:
-    cred = credentials.Certificate("firebase.json")
+    # Path for Render secret file
+    cred_path = "/etc/secrets/google_credentials.json"
+    if not os.path.exists(cred_path):
+        # Fallback for local development
+        cred_path = "firebase-credentials.json"
+        
+    cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
+    print("Firebase initialized successfully.")
 except Exception as e:
     print(f"Firebase initialization failed: {e}")
     db = None
@@ -53,7 +60,10 @@ def log_audit(action, user, details):
 
 @app.route("/")
 def health_check():
-    return "Server is up and running."
+    if db:
+        return "Server is up and running. Firestore is connected."
+    else:
+        return "Server is up and running, but Firestore connection failed."
 
 # --- User Management --
 @app.route("/api/users", methods=['GET'])
@@ -82,8 +92,10 @@ def login():
     results = query.stream()
     
     user_data = None
+    doc_id = None
     for doc in results:
         user_data = doc.to_dict()
+        doc_id = doc.id
 
     if not user_data:
         log_audit("Failed Login", usn_emp, f"User {usn_emp} not found.")
@@ -93,6 +105,7 @@ def login():
         # Remove password before sending user data to client
         user_info = user_data.copy()
         user_info.pop("password", None)
+        user_info['id'] = doc_id # Add document ID to user info
         log_audit("User Login", usn_emp, f"User {usn_emp} logged in successfully.")
         return jsonify(user_info)
     else:
