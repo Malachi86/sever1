@@ -294,7 +294,7 @@ def update_borrow_request(request_id):
             write_data(LIBRARY_BOOKS_FILE, books)
         
         records = read_data(BORROW_RECORDS_FILE)
-        records..append({
+        records.append({
             "id": f"REC{len(records) + 1}",
             "book_barcode": req['book_barcode'],
             "book_title": req['book_title'],
