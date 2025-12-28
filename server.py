@@ -66,7 +66,7 @@ def health_check():
     else:
         return "Server is up and running, but Firestore connection failed."
 
-# --- User Management --
+# --- User Management ---
 @app.route("/api/users", methods=['GET'])
 def get_users():
     if not db:
