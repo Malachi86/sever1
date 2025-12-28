@@ -25,7 +25,8 @@ except Exception as e:
 
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# Allow all origins for all routes
+CORS(app)
 
 DB_DIR = os.path.dirname(__file__)
 ENROLLMENTS_FILE = os.path.join(DB_DIR, 'enrollments.json')
@@ -365,7 +366,20 @@ def return_book():
     log_audit("Book Return", "Librarian", f"Book {barcode} returned by {student_id}.")
     return jsonify({"message": "Book returned successfully"})
 
-# --- Audit Log ---
+# --- Missing Routes ---
+@app.route("/api/books", methods=['GET'])
+def get_books():
+    return jsonify(read_data(LIBRARY_BOOKS_FILE))
+
+@app.route("/api/audit", methods=['GET'])
+def get_audit():
+    return jsonify(read_data(AUDIT_FILE))
+
+@app.route("/api/reservations", methods=['GET'])
+def get_reservations():
+    return jsonify([]) # Placeholder
+
+# --- Audit Log (Kept for compatibility) ---
 @app.route("/api/audit-log", methods=['GET'])
 def get_audit_log():
     return jsonify(read_data(AUDIT_FILE))
