@@ -27,9 +27,8 @@ except Exception as e:
 app = Flask(__name__)
 
 # --- CORS Configuration ---
-# Allow requests only from the specific Firebase Hosting URL for all API routes.
-# This is more secure than allowing all origins.
-CORS(app, resources={r"/api/*": {"origins": "https://amaccstudentrequest-9606-fafb6.web.app"}})
+# Allow all origins for debugging purposes.
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
 DB_DIR = os.path.dirname(__file__)
