@@ -27,40 +27,19 @@ except Exception as e:
 app = Flask(__name__)
 
 # --- CORS Configuration ---
-# Allow all origins for debugging purposes.
 CORS(app, supports_credentials=True)
 
-
-DB_DIR = os.path.dirname(__file__)
-ENROLLMENTS_FILE = os.path.join(DB_DIR, 'enrollments.json')
-REQUESTS_FILE = os.path.join(DB_DIR, 'requests.json')
-ATTENDANCE_FILE = os.path.join(DB_DIR, 'attendance.json')
-SUBJECTS_FILE = os.path.join(DB_DIR, 'subjects.json')
-AUDIT_FILE = os.path.join(DB_DIR, 'audit.json')
-LIBRARY_BOOKS_FILE = os.path.join(DB_DIR, 'library_books.json')
-BORROW_REQUESTS_FILE = os.path.join(DB_DIR, 'borrow_requests.json')
-BORROW_RECORDS_FILE = os.path.join(DB_DIR, 'borrow_records.json')
-
-def read_data(file_path):
-    try:
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-def write_data(file_path, data):
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=4)
-
 def log_audit(action, user, details):
-    audit_log = read_data(AUDIT_FILE)
-    audit_log.append({
+    if not db:
+        print("Audit Error: Firestore not initialized.")
+        return
+
+    db.collection('audit').add({
         "timestamp": datetime.datetime.utcnow().isoformat() + 'Z',
         "action": action,
         "user": user,
         "details": details
     })
-    write_data(AUDIT_FILE, audit_log)
 
 @app.route("/")
 def index():
@@ -92,7 +71,6 @@ def get_teachers():
     if not db:
         return jsonify({"error": "Firestore not initialized"}), 500
     users_ref = db.collection('users')
-    # Query for users with the role 'teacher'
     query = users_ref.where('role', '==', 'teacher')
     docs = query.stream()
     teachers = {doc.id: doc.to_dict() for doc in docs}
@@ -125,10 +103,9 @@ def login():
         return jsonify({"error": "User not found"}), 404
 
     if user_data.get("password") == password:
-        # Remove password before sending user data to client
         user_info = user_data.copy()
         user_info.pop("password", None)
-        user_info['id'] = doc_id # Add document ID to user info
+        user_info['id'] = doc_id
         log_audit("User Login", usn_emp, f"User {usn_emp} logged in successfully.")
         return jsonify(user_info)
     else:
@@ -157,36 +134,39 @@ def register():
     if new_user_data['role'] == 'teacher':
         new_user_data['subjects'] = []
     
-    # Add a new doc in collection 'users' with a generated id.
     db.collection('users').add(new_user_data)
     
     log_audit("User Registration", usn_emp, f"New user {usn_emp} registered as {new_user_data['role']}.")
-    return jsonify({"message": "User created successfully"}), 201
+    return jsonify({"message": "User created successfully"}), 21
 
 # --- Enrollments ---
 @app.route("/api/enrollments", methods=['GET', 'POST'])
 def handle_enrollments():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    enrollments_ref = db.collection('enrollments')
+
     if request.method == 'GET':
-        return jsonify(read_data(ENROLLMENTS_FILE))
+        docs = enrollments_ref.stream()
+        enrollments = [doc.to_dict() for doc in docs]
+        return jsonify(enrollments)
     else: # POST
         data = request.get_json()
         student_usn = data.get("student_usn")
-        enrollments = read_data(ENROLLMENTS_FILE)
-        if any(e.get('student_usn') == student_usn and e.get('subject_name') == data.get("subject_name") and e.get('status') in ['Pending', 'Approved'] for e in enrollments):
+
+        # Check for existing pending or approved enrollment
+        existing_enrollment_query = enrollments_ref.where('student_usn', '==', student_usn).where('subject_name', '==', data.get("subject_name")).where('status', 'in', ['Pending', 'Approved'])
+        if any(existing_enrollment_query.stream()):
             return jsonify({"error": "You already have a pending or approved enrollment for this subject."}), 409
         
+        # Get student and teacher details
         users_ref = db.collection('users')
         student_query = users_ref.where('usn_emp', '==', student_usn).limit(1)
-        student_results = student_query.stream()
-        student = None
-        for doc in student_results:
-            student = doc.to_dict()
+        student = next((doc.to_dict() for doc in student_query.stream()), None)
 
         teacher_query = users_ref.where('usn_emp', '==', data.get("teacher_usn")).limit(1)
-        teacher_results = teacher_query.stream()
-        teacher = None
-        for doc in teacher_results:
-            teacher = doc.to_dict()
+        teacher = next((doc.to_dict() for doc in teacher_query.stream()), None)
 
         if not student or not teacher:
             return jsonify({"error": "Invalid student or teacher ID"}), 404
@@ -200,179 +180,233 @@ def handle_enrollments():
             "status": "Pending",
             "requested_at": datetime.datetime.utcnow().isoformat() + 'Z'
         }
-        enrollments.append(new_enrollment)
-        write_data(ENROLLMENTS_FILE, enrollments)
+        
+        db.collection('enrollments').add(new_enrollment)
         log_audit("Enrollment Request", student_usn, f"Student {student_usn} requested to enroll in {data.get('subject_name')}.")
         return jsonify({"message": "Enrollment request submitted"}), 201
 
 @app.route("/api/enrollments/<string:enrollment_id>", methods=['PUT'])
 def update_enrollment_status(enrollment_id):
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+        
     data = request.get_json()
     new_status = data.get("status")
     if new_status not in ["Approved", "Declined"]:
         return jsonify({"error": "Invalid status"}), 400
     
-    enrollments = read_data(ENROLLMENTS_FILE)
-    enrollment = next((e for e in enrollments if e.get('student_usn') + e.get('subject_name') == enrollment_id), None)
-    
-    if not enrollment:
+    enrollment_ref = db.collection('enrollments').document(enrollment_id)
+    enrollment = enrollment_ref.get()
+
+    if not enrollment.exists:
         return jsonify({"error": "Enrollment not found"}), 404
         
-    enrollment['status'] = new_status
-    write_data(ENROLLMENTS_FILE, enrollments)
-    log_audit("Enrollment Update", "Admin/Teacher", f"Enrollment for {enrollment['student_usn']} in {enrollment['subject_name']} set to {new_status}.")
+    enrollment_ref.update({'status': new_status})
+    log_audit("Enrollment Update", "Admin/Teacher", f"Enrollment for {enrollment.to_dict()['student_usn']} in {enrollment.to_dict()['subject_name']} set to {new_status}.")
     return jsonify({"message": f"Enrollment {new_status.lower()}"})
 
 # --- Lab/Room Requests ---
 @app.route("/api/requests", methods=['GET', 'POST'])
 def handle_requests():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    requests_ref = db.collection('requests')
+
     if request.method == 'GET':
-        return jsonify(read_data(REQUESTS_FILE))
+        docs = requests_ref.stream()
+        requests = [doc.to_dict() for doc in docs]
+        return jsonify(requests)
     else: # POST
         data = request.get_json()
-        requests = read_data(REQUESTS_FILE)
         new_request = {
-            "id": f"REQ{len(requests) + 1}",
             **data,
             "status": "Pending",
             "requested_at": datetime.datetime.utcnow().isoformat() + 'Z'
         }
-        requests.append(new_request)
-        write_data(REQUESTS_FILE, requests)
+        update_time, request_ref = requests_ref.add(new_request)
+        new_request['id'] = request_ref.id
+        
         log_audit("Resource Request", data.get('student'), f"Request for {data.get('type')} created.")
         return jsonify(new_request), 201
 
 @app.route("/api/requests/<string:request_id>", methods=['PUT'])
 def update_request_status(request_id):
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
     data = request.get_json()
     new_status = data.get("status")
     if new_status not in ["Approved", "Declined"]:
         return jsonify({"error": "Invalid status"}), 400
 
-    requests = read_data(REQUESTS_FILE)
-    req = next((r for r in requests if r.get('id') == request_id), None)
-    if not req:
+    request_ref = db.collection('requests').document(request_id)
+    if not request_ref.get().exists:
         return jsonify({"error": "Request not found"}), 404
     
-    req['status'] = new_status
-    write_data(REQUESTS_FILE, requests)
+    request_ref.update({'status': new_status})
     log_audit("Request Update", "Admin", f"Request {request_id} status updated to {new_status}.")
     return jsonify({"message": f"Request {new_status.lower()}"})
 
 # --- Subjects ---
 @app.route("/api/subjects", methods=['GET'])
 def get_subjects():
-    return jsonify(read_data(SUBJECTS_FILE))
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    subjects_ref = db.collection('subjects')
+    docs = subjects_ref.stream()
+    subjects = [doc.to_dict() for doc in docs]
+    return jsonify(subjects)
 
 # --- Attendance ---
 @app.route("/api/attendance", methods=['GET', 'POST'])
 def handle_attendance():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
+    attendance_ref = db.collection('attendance')
+
     if request.method == 'GET':
-        return jsonify(read_data(ATTENDANCE_FILE))
+        docs = attendance_ref.stream()
+        attendance = [doc.to_dict() for doc in docs]
+        return jsonify(attendance)
     else: # POST
         data = request.get_json()
-        attendance_records = read_data(ATTENDANCE_FILE)
         new_record = {
-            "id": f"ATT{len(attendance_records) + 1}",
             **data,
             "timestamp": datetime.datetime.utcnow().isoformat() + 'Z'
         }
-        attendance_records.append(new_record)
-        write_data(ATTENDANCE_FILE, attendance_records)
+        
+        update_time, record_ref = attendance_ref.add(new_record)
+        new_record['id'] = record_ref.id
         log_audit("Attendance Marked", data.get('teacher_id'), f"Attendance marked for subject {data.get('subject')}.")
         return jsonify(new_record), 201
 
 # --- Library ---
 @app.route("/api/library/books", methods=['GET'])
 def get_library_books():
-    return jsonify(read_data(LIBRARY_BOOKS_FILE))
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    books_ref = db.collection('library_books')
+    docs = books_ref.stream()
+    books = [doc.to_dict() for doc in docs]
+    return jsonify(books)
 
 @app.route("/api/library/borrow-requests", methods=['GET', 'POST'])
 def handle_borrow_requests():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    borrow_requests_ref = db.collection('borrow_requests')
+    
     if request.method == 'GET':
-        return jsonify(read_data(BORROW_REQUESTS_FILE))
+        docs = borrow_requests_ref.stream()
+        requests = [doc.to_dict() for doc in docs]
+        return jsonify(requests)
     else: # POST
         data = request.get_json()
-        borrow_requests = read_data(BORROW_REQUESTS_FILE)
         new_borrow_request = {
-            "id": f"BR{len(borrow_requests) + 1}",
             **data,
             "status": "Pending",
             "requested_at": datetime.datetime.utcnow().isoformat() + 'Z'
         }
-        borrow_requests.append(new_borrow_request)
-        write_data(BORROW_REQUESTS_FILE, borrow_requests)
+        
+        update_time, req_ref = borrow_requests_ref.add(new_borrow_request)
+        new_borrow_request['id'] = req_ref.id
         log_audit("Borrow Request", data.get('student'), f"Book {data.get('book_barcode')} requested.")
         return jsonify(new_borrow_request), 201
 
 @app.route("/api/library/borrow-requests/<string:request_id>", methods=['PUT'])
 def update_borrow_request(request_id):
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
     data = request.get_json()
     action = data.get("action") # "Approve" or "Decline"
     
-    borrow_requests = read_data(BORROW_REQUESTS_FILE)
-    req = next((r for r in borrow_requests if r.get('id') == request_id), None)
-    if not req:
+    borrow_request_ref = db.collection('borrow_requests').document(request_id)
+    req = borrow_request_ref.get()
+    
+    if not req.exists:
         return jsonify({"error": "Borrow request not found"}), 404
+
+    req_data = req.to_dict()
 
     if action == "Approve":
         days = int(data.get('days', 7))
         due_date = datetime.datetime.utcnow() + datetime.timedelta(days=days)
-        req['status'] = 'Approved'
-        req['due_date'] = due_date.isoformat() + 'Z'
-
-        books = read_data(LIBRARY_BOOKS_FILE)
-        book = next((b for b in books if b.get('barcode') == req.get('book_barcode')), None)
-        if book:
-            book['status'] = 'Borrowed'
-            book['borrowed_by'] = req['student']
-            book['due_date'] = req['due_date']
-            write_data(LIBRARY_BOOKS_FILE, books)
         
-        records = read_data(BORROW_RECORDS_FILE)
-        records.append({
-            "id": f"REC{len(records) + 1}",
-            "book_barcode": req['book_barcode'],
-            "book_title": req['book_title'],
-            "student": req['student'],
-            "student_name": req['student_name'],
+        borrow_request_ref.update({
+            'status': 'Approved',
+            'due_date': due_date.isoformat() + 'Z'
+        })
+
+        books_ref = db.collection('library_books')
+        book_query = books_ref.where('barcode', '==', req_data.get('book_barcode')).limit(1)
+        book_doc = next(book_query.stream(), None)
+
+        if book_doc:
+            book_doc.reference.update({
+                'status': 'Borrowed',
+                'borrowed_by': req_data['student'],
+                'due_date': due_date.isoformat() + 'Z'
+            })
+
+        db.collection('borrow_records').add({
+            "book_barcode": req_data['book_barcode'],
+            "book_title": req_data['book_title'],
+            "student": req_data['student'],
+            "student_name": req_data['student_name'],
             "borrowed_at": datetime.datetime.utcnow().isoformat() + 'Z',
-            "due_date": req['due_date'],
+            "due_date": due_date.isoformat() + 'Z',
             "returned_at": None
         })
-        write_data(BORROW_RECORDS_FILE, records)
         log_audit("Borrow Request Approved", "Librarian", f"Request {request_id} approved.")
     elif action == "Decline":
-        req['status'] = 'Declined'
-        req['admin_feedback'] = data.get('feedback', '')
+        borrow_request_ref.update({
+            'status': 'Declined',
+            'admin_feedback': data.get('feedback', '')
+        })
         log_audit("Borrow Request Declined", "Librarian", f"Request {request_id} declined.")
     else:
         return jsonify({"error": "Invalid action"}), 400
         
-    write_data(BORROW_REQUESTS_FILE, borrow_requests)
-    return jsonify(req)
+    return jsonify(borrow_request_ref.get().to_dict())
 
 @app.route("/api/library/return", methods=['POST'])
 def return_book():
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
     data = request.get_json()
     barcode = data.get("barcode")
-    books = read_data(LIBRARY_BOOKS_FILE)
-    book = next((b for b in books if b.get('barcode') == barcode and b.get('status') == 'Borrowed'), None)
     
-    if not book:
+    books_ref = db.collection('library_books')
+    book_query = books_ref.where('barcode', '==', barcode).where('status', '==', 'Borrowed').limit(1)
+    book_doc = next(book_query.stream(), None)
+    
+    if not book_doc:
         return jsonify({"error": "Borrowed book with this barcode not found"}), 404
         
-    student_id = book['borrowed_by']
-    book['status'] = 'Available'
-    book['borrowed_by'] = None
-    book['due_date'] = None
-    write_data(LIBRARY_BOOKS_FILE, books)
+    book_data = book_doc.to_dict()
+    student_id = book_data['borrowed_by']
+    
+    book_doc.reference.update({
+        'status': 'Available',
+        'borrowed_by': None,
+        'due_date': None
+    })
 
-    records = read_data(BORROW_RECORDS_FILE)
-    record = next((r for r in reversed(records) if r.get('book_barcode') == barcode and r.get('student') == student_id and not r.get('returned_at')), None)
-    if record:
-        record['returned_at'] = datetime.datetime.utcnow().isoformat() + 'Z'
-        write_data(BORROW_RECORDS_FILE, records)
+    records_ref = db.collection('borrow_records')
+    record_query = records_ref.where('book_barcode', '==', barcode).where('student', '==', student_id).where('returned_at', '==', None).limit(1)
+    record_doc = next(record_query.stream(), None)
+
+    if record_doc:
+        record_doc.reference.update({
+            'returned_at': datetime.datetime.utcnow().isoformat() + 'Z'
+        })
 
     log_audit("Book Return", "Librarian", f"Book {barcode} returned by {student_id}.")
     return jsonify({"message": "Book returned successfully"})
@@ -380,20 +414,32 @@ def return_book():
 # --- Missing Routes ---
 @app.route("/api/books", methods=['GET'])
 def get_books():
-    return jsonify(read_data(LIBRARY_BOOKS_FILE))
+    return get_library_books()
 
 @app.route("/api/audit", methods=['GET'])
 def get_audit():
-    return jsonify(read_data(AUDIT_FILE))
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    audit_ref = db.collection('audit')
+    docs = audit_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
+    audit_logs = [doc.to_dict() for doc in docs]
+    return jsonify(audit_logs)
 
 @app.route("/api/reservations", methods=['GET'])
 def get_reservations():
-    return jsonify([]) # Placeholder
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    reservations_ref = db.collection('reservations')
+    docs = reservations_ref.stream()
+    reservations = [doc.to_dict() for doc in docs]
+    return jsonify(reservations)
 
 # --- Audit Log (Kept for compatibility) ---
 @app.route("/api/audit-log", methods=['GET'])
 def get_audit_log():
-    return jsonify(read_data(AUDIT_FILE))
+    return get_audit()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=True)
