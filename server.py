@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 # --- CORS Configuration ---
 # Allow all origins for debugging purposes.
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, supports_credentials=True)
 
 
 DB_DIR = os.path.dirname(__file__)
@@ -63,11 +63,19 @@ def log_audit(action, user, details):
     write_data(AUDIT_FILE, audit_log)
 
 @app.route("/")
-def health_check():
+def index():
     if db:
         return "Server is up and running. Firestore is connected."
     else:
         return "Server is up and running, but Firestore connection failed."
+
+@app.route("/health")
+def health_check():
+    return jsonify({
+        "status": "ok",
+        "firebase": db is not None,
+        "timestamp": datetime.datetime.utcnow().isoformat() + 'Z'
+    })
 
 # --- User Management ---
 @app.route("/api/users", methods=['GET'])
