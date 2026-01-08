@@ -97,6 +97,7 @@ def login():
     for doc in results:
         user_data = doc.to_dict()
         doc_id = doc.id
+        break 
 
     if not user_data:
         log_audit("Failed Login", usn_emp, f"User {usn_emp} not found.")
@@ -137,7 +138,7 @@ def register():
     db.collection('users').add(new_user_data)
     
     log_audit("User Registration", usn_emp, f"New user {usn_emp} registered as {new_user_data['role']}.")
-    return jsonify({"message": "User created successfully"}), 21
+    return jsonify({"message": "User created successfully"}), 201
 
 # --- Enrollments ---
 @app.route("/api/enrollments", methods=['GET', 'POST'])
