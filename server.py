@@ -66,6 +66,32 @@ def get_users():
     users = [doc.to_dict() for doc in docs]
     return jsonify(users)
 
+@app.route("/api/users/<string:usn_emp>", methods=['DELETE'])
+def delete_user(usn_emp):
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
+    try:
+        users_ref = db.collection('users')
+        query = users_ref.where('usn_emp', '==', usn_emp).limit(1)
+        docs = query.stream()
+
+        doc_to_delete = None
+        for doc in docs:
+            doc_to_delete = doc
+            break
+
+        if not doc_to_delete:
+            return jsonify({"error": "User not found"}), 404
+
+        doc_to_delete.reference.delete()
+        log_audit("User Deletion", "Admin", f"User with usn_emp {usn_emp} deleted.")
+        return jsonify({"message": "User deleted successfully"}), 200
+
+    except Exception as e:
+        log_audit("User Deletion Failed", "Admin", f"Error deleting user {usn_emp}: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/teachers", methods=['GET'])
 def get_teachers():
     if not db:
