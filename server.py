@@ -286,6 +286,22 @@ def get_subjects():
     subjects = [doc.to_dict() for doc in docs]
     return jsonify(subjects)
 
+@app.route("/api/subjects/teacher/<string:teacher_usn>", methods=['GET'])
+def get_subjects_by_teacher(teacher_usn):
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+    
+    subjects_ref = db.collection('subjects')
+    query = subjects_ref.where('teacher', '==', teacher_usn)
+    docs = query.stream()
+    subjects = []
+    for doc in docs:
+        subject = doc.to_dict()
+        subject['id'] = doc.id
+        subjects.append(subject)
+
+    return jsonify(subjects)
+
 # --- Attendance ---
 @app.route("/api/attendance", methods=['GET', 'POST'])
 def handle_attendance():
