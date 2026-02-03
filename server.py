@@ -304,6 +304,29 @@ def handle_subjects():
             log_audit("Subject Creation Failed", data.get('teacher'), f"Error creating subject: {e}")
             return jsonify({"error": str(e)}), 500
 
+@app.route("/api/subjects/<string:subject_id>", methods=['DELETE'])
+def delete_subject(subject_id):
+    if not db:
+        return jsonify({"error": "Firestore not initialized"}), 500
+
+    try:
+        subject_ref = db.collection('subjects').document(subject_id)
+        subject_doc = subject_ref.get()
+
+        if not subject_doc.exists:
+            return jsonify({"error": "Subject not found"}), 404
+
+        subject_name = subject_doc.to_dict().get("name", "N/A")
+        
+        subject_ref.delete()
+        
+        log_audit("Subject Deletion", "System", f"Subject '{subject_name}' (ID: {subject_id}) deleted.")
+        
+        return jsonify({"message": "Subject deleted successfully"}), 200
+    except Exception as e:
+        log_audit("Subject Deletion Failed", "System", f"Error deleting subject {subject_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/subjects/teacher/<string:teacher_usn>", methods=['GET'])
 def get_subjects_by_teacher(teacher_usn):
     if not db:
