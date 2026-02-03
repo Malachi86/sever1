@@ -276,15 +276,33 @@ def update_request_status(request_id):
     return jsonify({"message": f"Request {new_status.lower()}"})
 
 # --- Subjects ---
-@app.route("/api/subjects", methods=['GET'])
-def get_subjects():
+@app.route("/api/subjects", methods=['GET', 'POST'])
+def handle_subjects():
     if not db:
         return jsonify({"error": "Firestore not initialized"}), 500
     
     subjects_ref = db.collection('subjects')
-    docs = subjects_ref.stream()
-    subjects = [doc.to_dict() for doc in docs]
-    return jsonify(subjects)
+
+    if request.method == 'GET':
+        docs = subjects_ref.stream()
+        subjects = [doc.to_dict() for doc in docs]
+        return jsonify(subjects)
+    else: # POST
+        data = request.get_json()
+        new_subject = {
+            "name": data.get("name"),
+            "teacher": data.get("teacher"),
+            "schedules": data.get("schedules", [])
+        }
+
+        try:
+            update_time, subject_ref = db.collection('subjects').add(new_subject)
+            new_subject['id'] = subject_ref.id
+            log_audit("Subject Creation", data.get('teacher'), f"Subject '{data.get('name')}' created.")
+            return jsonify(new_subject), 201
+        except Exception as e:
+            log_audit("Subject Creation Failed", data.get('teacher'), f"Error creating subject: {e}")
+            return jsonify({"error": str(e)}), 500
 
 @app.route("/api/subjects/teacher/<string:teacher_usn>", methods=['GET'])
 def get_subjects_by_teacher(teacher_usn):
